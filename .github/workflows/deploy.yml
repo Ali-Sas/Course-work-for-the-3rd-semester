@@ -1,36 +1,110 @@
-name: Deploy Docker Services
+# .github/workflows/ci-cd.yml
 
+name: CI/CD Pipeline
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
 
 jobs:
-  deploy:
+  main:
     runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
 
+    - name: Set up environment
+      run: |
+        echo "Setting up environment variables"
+        echo "DOCKER_REGISTRY=${{ secrets.DOCKER_REGISTRY }}" >> $GITHUB_ENV
+        echo "VERSION=$(date +%Y%m%d%H%M%S)" >> $GITHUB_ENV
+
+  tests:
+    needs: main
+    runs-on: ubuntu-latest
     steps:
     - name: Checkout code
       uses: actions/checkout@v3
 
-    - name: Set up Docker
+    - name: Run Suricata rule tests
+      run: |
+        # Проверка синтаксиса правил Suricata
+        docker run --rm \
+          -v $(pwd)/rules:/etc/suricata/rules \
+          jasonish/suricata-verify ./verify.sh
+
+    - name: Run Integration tests
+      run: |
+        # Запуск docker-compose для тестового окружения
+        docker-compose -f docker-compose.test.yml up -d
+        # Ожидание готовности сервисов
+        sleep 30
+        # Выполнение тестов
+        docker exec security-monitor pytest /app/tests/
+        # Очистка
+        docker-compose -f docker-compose.test.yml down
+
+  build:
+    needs: tests
+    runs-on: ubuntu-latest
+    steps:
+    - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v2
+
+    - name: Login to Docker
+      uses: docker/login-action@v2
       with:
-        version: latest
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
 
-    - name: Install Docker Compose
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y docker-compose
+    - name: Build Suricata Image
+      uses: docker/build-push-action@v4
+      with:
+        context: ./suricata
+        tags: ${{ env.DOCKER_REGISTRY }}/suricata:${{ env.VERSION }}
+        push: true
 
-    - name: Clean up old resources
-      run: |
-        docker-compose down --volumes --remove-orphans
-        docker container prune -f
-        docker volume prune -f
+    - name: Build PostgreSQL Image
+      uses: docker/build-push-action@v4
+      with:
+        context: ./postgresql
+        tags: ${{ env.DOCKER_REGISTRY }}/postgresql:${{ env.VERSION }}
+        push: true
 
-    - name: Build and deploy
+    - name: Build Nginx Image
+      uses: docker/build-push-action@v4
+      with:
+        context: ./nginx
+        tags: ${{ env.DOCKER_REGISTRY }}/nginx:${{ env.VERSION }}
+        push: true
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+    - name: Access remote server
+      uses: appleboy/ssh-action@v0.1.17
+      with:
+        host: ${{ secrets.SERVER_HOST }}
+        username: ${{ secrets.SERVER_USER }}
+        key: ${{ secrets.SSH_KEY }}
+
+    - name: Pull and Deploy Services
       run: |
+        ssh -i ${{ secrets.SSH_KEY }} ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << EOF
+        # Логин в Docker registry
+        docker login -u ${{ secrets.DOCKER_USERNAME }} -p ${{ secrets.DOCKER_PASSWORD }}
+
+        # Остановка существующих контейнеров
+        docker-compose down
+
+        # Изменение версии в docker-compose.yml
+        sed -i "s/{{VERSION}}/${{ env.VERSION }}/g" docker-compose.yml
+
+        # Поднятие обновленных контейнеров
         docker-compose up -d --build
-        echo "Active containers:"
+
+        # Проверка запущенных контейнеров
         docker ps
+        EOF
