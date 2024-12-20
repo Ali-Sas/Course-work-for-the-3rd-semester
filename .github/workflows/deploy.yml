@@ -1,6 +1,5 @@
-# .github/workflows/ci-cd.yml
-
 name: CI/CD Pipeline
+
 on:
   push:
     branches: [ main ]
@@ -26,7 +25,10 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v3
-
+    - name: Set up Docker
+      uses: docker/setup-buildx-action@v2
+    - name: Install docker-compose
+      run: sudo apt-get update && sudo apt-get install -y docker-compose
     - name: Run Integration tests
       run: |
         # Запуск docker-compose для тестового окружения
@@ -40,67 +42,3 @@ jobs:
         python -c "assert 1 + 1 == 2, 'Test failed: 1 + 1 does not equal 2'"
         # Очистка
         docker-compose -f docker-compose.test.yml down
-
-  build:
-    needs: tests
-    runs-on: ubuntu-latest
-    steps:
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v2
-
-    - name: Login to Docker
-      uses: docker/login-action@v2
-      with:
-        username: ${{ secrets.DOCKER_USERNAME }}
-        password: ${{ secrets.DOCKER_PASSWORD }}
-
-    - name: Build Suricata Image
-      uses: docker/build-push-action@v4
-      with:
-        context: ./suricata
-        tags: ${{ env.DOCKER_REGISTRY }}/suricata:${{ env.VERSION }}
-        push: true
-
-    - name: Build PostgreSQL Image
-      uses: docker/build-push-action@v4
-      with:
-        context: ./postgresql
-        tags: ${{ env.DOCKER_REGISTRY }}/postgresql:${{ env.VERSION }}
-        push: true
-
-    - name: Build Nginx Image
-      uses: docker/build-push-action@v4
-      with:
-        context: ./nginx
-        tags: ${{ env.DOCKER_REGISTRY }}/nginx:${{ env.VERSION }}
-        push: true
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-    - name: Access remote server
-      uses: appleboy/ssh-action@v0.1.17
-      with:
-        host: ${{ secrets.SERVER_HOST }}
-        username: ${{ secrets.SERVER_USER }}
-        key: ${{ secrets.SSH_KEY }}
-
-    - name: Pull and Deploy Services
-      run: |
-        ssh -i ${{ secrets.SSH_KEY }} ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << EOF
-        # Логин в Docker registry
-        docker login -u ${{ secrets.DOCKER_USERNAME }} -p ${{ secrets.DOCKER_PASSWORD }}
-
-        # Остановка существующих контейнеров
-        docker-compose down
-
-        # Изменение версии в docker-compose.yml
-        sed -i "s/{{VERSION}}/${{ env.VERSION }}/g" docker-compose.yml
-
-        # Поднятие обновленных контейнеров
-        docker-compose up -d --build
-
-        # Проверка запущенных контейнеров
-        docker ps
-        EOF
