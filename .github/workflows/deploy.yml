@@ -10,43 +10,74 @@ jobs:
   main:
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v3
 
-  build:
+  tests:
     needs: main
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
-    - name: Build Backend
-      run: |
-        cd backend
-        npm run build
-    - name: Build Frontend
-      run: |
-        cd frontend
-        npm run build
-    - name: Create a single artifact for easier deployment
-      run: |
-        mkdir -p dist
-        cp -r backend/dist dist/backend
-        cp -r frontend/build dist/frontend
+      - name: Checkout code
+        uses: actions/checkout@v3
+      - name: Set up Node.js (Frontend)
+        uses: actions/setup-node@v3
+        with:
+          node-version: 16 # Adjust as needed
+      - name: Install Frontend Dependencies
+        run: npm install --prefix frontend
+      - name: Run Frontend Tests
+        run: npm run test --prefix frontend # Replace with your test command
+      - name: Set up Node.js (Backend)
+        uses: actions/setup-node@v3
+        with:
+          node-version: 16 # Adjust as needed
+      - name: Install Backend Dependencies
+        run: npm install --prefix backend
+      - name: Run Backend Tests
+        run: npm run test --prefix backend  # Replace with your test command
+
+
+  build:
+    needs: tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      - name: Build Frontend
+        run: |
+          cd frontend
+          npm run build # Replace with your build command
+      - name: Build Backend
+        run: |
+          cd backend
+          npm run build # Replace with your build command
+      - name: Build Nginx Configuration (if needed)
+        run: |
+          # Any commands to generate or modify your nginx config
+          # Example:
+          # cp nginx/nginx.conf.template nginx/nginx.conf
+          # sed -i "s/VERSION/${{github.sha}}/g" nginx/nginx.conf
+
 
   deploy:
     needs: build
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
-    - name: Deploy to server via SSH (Example)
-      uses: appleboy/ssh-action@v0.1.17
-      with:
-        host: ${{ secrets.SERVER_HOST }}
-        username: ${{ secrets.SERVER_USER }}
-        key: ${{ secrets.SSH_PRIVATE_KEY }}
-        script: |
-          mkdir -p /var/www/my-app
-          scp -r dist/* ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/var/www/my-app
-          # Add commands to restart your server if needed.  Example for systemd:
-          # systemctl restart my-app-service
+      - name: Checkout code
+        uses: actions/checkout@v3
+      - name: Deploy to Server via SSH (Example)
+        uses: appleboy/ssh-action@v0.1.17
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            mkdir -p /var/www/my-app
+            scp -r frontend/build/* ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/var/www/my-app/frontend
+            scp -r backend/dist/* ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/var/www/my-app/backend
+            scp -r nginx/* ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/etc/nginx/sites-available/ # Adapt to your Nginx setup
+            # Restart Nginx
+            ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "sudo systemctl restart nginx"
+            # Optionally restart backend if needed
+            # ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "sudo systemctl restart your_backend_service"
+
