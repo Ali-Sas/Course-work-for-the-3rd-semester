@@ -10,14 +10,8 @@ jobs:
   main:
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout repository
+    - name: Checkout code
       uses: actions/checkout@v3
-
-    - name: Set up environment
-      run: |
-        echo "Setting up environment variables"
-        echo "DOCKER_REGISTRY=${{ secrets.DOCKER_REGISTRY }}" >> $GITHUB_ENV
-        echo "VERSION=$(date +%Y%m%d%H%M%S)" >> $GITHUB_ENV
 
   tests:
     needs: main
@@ -25,36 +19,22 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v3
-    - name: Set up Docker
-      uses: docker/setup-buildx-action@v2
-    - name: Install docker-compose #Still needed for later
-      run: sudo apt-get update && sudo apt-get install -y docker-compose
-    - name: Build and Run Test Containers
-      run: |
-        # Build images if needed (replace with your actual build commands)
-        docker build -t test-suricata ./suricata
-        docker build -t test-postgresql ./postgresql
-        docker build -t test-nginx ./nginx
-
-        # Run containers - adjust ports and volumes as needed
-        docker run -d -p 5432:5432 --name test-postgresql test-postgresql
-        docker run -d -p 8080:80 --name test-nginx test-nginx
-        docker run -d --name test-suricata test-suricata
-
-
-        # Wait for services to start (adjust time as needed)
-        sleep 30
-
-        # Run tests (replace with your actual test command)
-        docker exec test-security-monitor pytest /app/tests/ # assuming 'security-monitor' is the container name for tests
-
-        # Check 1+1=2
-        echo "Running simple test: 1 + 1 = 2"
-        python -c "assert 1 + 1 == 2, 'Test failed: 1 + 1 does not equal 2'"
-
-        # Stop and remove containers
-        docker stop test-suricata test-postgresql test-nginx && docker rm test-suricata test-postgresql test-nginx
-
+    - name: Setup Node.js (Backend)
+      uses: actions/setup-node@v3
+      with:
+        node-version: 16
+    - name: Install Backend Dependencies
+      run: npm install --prefix backend
+    - name: Run Backend Tests (Example: Jest)
+      run: npm run test --prefix backend
+    - name: Setup Node.js (Frontend)
+      uses: actions/setup-node@v3
+      with:
+        node-version: 16
+    - name: Install Frontend Dependencies
+      run: npm install --prefix frontend
+    - name: Run Frontend Tests (Example: Jest)
+      run: npm run test --prefix frontend
 
 
   build:
@@ -63,48 +43,34 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v3
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v2
-    - name: Login to Docker
-      uses: docker/login-action@v2
-      with:
-        username: ${{ secrets.DOCKER_USERNAME }}
-        password: ${{ secrets.DOCKER_PASSWORD }}
-    - name: Build Suricata Image
-      uses: docker/build-push-action@v4
-      with:
-        context: ./suricata
-        tags: ${{ env.DOCKER_REGISTRY }}/suricata:${{ env.VERSION }}
-        push: true
-    - name: Build PostgreSQL Image
-      uses: docker/build-push-action@v4
-      with:
-        context: ./postgresql
-        tags: ${{ env.DOCKER_REGISTRY }}/postgresql:${{ env.VERSION }}
-        push: true
-    - name: Build Nginx Image
-      uses: docker/build-push-action@v4
-      with:
-        context: ./nginx
-        tags: ${{ env.DOCKER_REGISTRY }}/nginx:${{ env.VERSION }}
-        push: true
+    - name: Build Backend
+      run: |
+        cd backend
+        npm run build
+    - name: Build Frontend
+      run: |
+        cd frontend
+        npm run build
+    - name: Create a single artifact for easier deployment
+      run: |
+        mkdir -p dist
+        cp -r backend/dist dist/backend
+        cp -r frontend/build dist/frontend
 
   deploy:
     needs: build
     runs-on: ubuntu-latest
     steps:
-    - name: Access remote server
+    - name: Checkout code
+      uses: actions/checkout@v3
+    - name: Deploy to server via SSH (Example)
       uses: appleboy/ssh-action@v0.1.17
       with:
         host: ${{ secrets.SERVER_HOST }}
         username: ${{ secrets.SERVER_USER }}
-        key: ${{ secrets.SSH_KEY }}
-    - name: Pull and Deploy Services
-      run: |
-        ssh -i ${{ secrets.SSH_KEY }} ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << EOF
-        docker login -u ${{ secrets.DOCKER_USERNAME }} -p ${{ secrets.DOCKER_PASSWORD }}
-        docker-compose down
-        sed -i "s/{{VERSION}}/${{ env.VERSION }}/g" docker-compose.yml
-        docker-compose up -d --build
-        docker ps
-        EOF
+        key: ${{ secrets.SSH_PRIVATE_KEY }}
+        script: |
+          mkdir -p /var/www/my-app
+          scp -r dist/* ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/var/www/my-app
+          # Add commands to restart your server if needed.  Example for systemd:
+          # systemctl restart my-app-service
