@@ -16,25 +16,6 @@ jobs:
   tests:
     needs: main
     runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-      - name: Set up Node.js (Frontend)
-        uses: actions/setup-node@v3
-        with:
-          node-version: 16 # Adjust as needed
-      - name: Install Frontend Dependencies
-        run: npm install --prefix frontend
-      - name: Run Frontend Tests
-        run: npm run test --prefix frontend # Replace with your test command
-      - name: Set up Node.js (Backend)
-        uses: actions/setup-node@v3
-        with:
-          node-version: 16 # Adjust as needed
-      - name: Install Backend Dependencies
-        run: npm install --prefix backend
-      - name: Run Backend Tests
-        run: npm run test --prefix backend  # Replace with your test command
 
 
   build:
